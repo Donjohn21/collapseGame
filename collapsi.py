@@ -1,469 +1,461 @@
 import random
 import time
-import copy
-from typing import Callable, List
+import math
+from typing import List, Tuple
 
-# ==============================
-# CONFIGURACIÓN GENERAL
-# ==============================
+# =====================================
+# CONFIGURACION GLOBAL
+# =====================================
+SIZE = 4
+JOKER = "J"
+COLLAPSED = "X"
+DIRS = [(-1,0),(1,0),(0,-1),(0,1)]
 
-FILAS = 6
-COLUMNAS = 6
-COLORES = [1, 2, 3, 4]
+MAX_MOV = 12
+MAX_CELDAS = 16
+MAX_DIST = 6
 
-NUM_MATCHES = 5
-TIME_LIMITS = [1, 3, 10]
-MAX_DEPTH = 10
+RED = "\033[91m"
+BLUE = "\033[94m"
+RESET = "\033[0m"
 
-# ==============================
-# UTILIDADES DEL JUEGO
-# ==============================
+# =====================================
+# TABLERO
+# =====================================
 
-def crear_tablero():
-    return [[random.choice(COLORES) for _ in range(COLUMNAS)] for _ in range(FILAS)]
+def crear_tablero(num_jugadores=2):
+    cartas = [JOKER]*num_jugadores + [1]*4 + [2]*4 + [3]*4 + [4]*2
+    while len(cartas) < SIZE*SIZE:
+        cartas.append(1)
+    random.shuffle(cartas)
+    return [cartas[i*SIZE:(i+1)*SIZE] for i in range(SIZE)]
 
-def mostrar_tablero(tablero):
-    for fila in tablero:
-        print(" ".join(str(v) if v != 0 else "." for v in fila))
+
+def encontrar_jokers(tab):
+    pos = []
+    for r in range(SIZE):
+        for c in range(SIZE):
+            if tab[r][c] == JOKER:
+                pos.append((r,c))
+    return pos
+
+
+def imprimir_tablero(tab, p1=None, p2=None):
+    for r in range(SIZE):
+        fila = []
+        for c in range(SIZE):
+            if p1 is not None and (r,c) == p1:
+                fila.append(RED+"A"+RESET)
+            elif p2 is not None and (r,c) == p2:
+                fila.append(BLUE+"B"+RESET)
+            else:
+                fila.append(str(tab[r][c]))
+        print(" ".join(fila))
     print()
 
-def buscar_grupo(tablero, f, c, valor, visitados):
-    if f < 0 or f >= FILAS or c < 0 or c >= COLUMNAS:
-        return []
-    if (f, c) in visitados or tablero[f][c] != valor:
-        return []
+# =====================================
+# TOROIDAL
+# =====================================
 
-    visitados.add((f, c))
-    grupo = [(f, c)]
-    grupo += buscar_grupo(tablero, f+1, c, valor, visitados)
-    grupo += buscar_grupo(tablero, f-1, c, valor, visitados)
-    grupo += buscar_grupo(tablero, f, c+1, valor, visitados)
-    grupo += buscar_grupo(tablero, f, c-1, valor, visitados)
-    return grupo
+def wrap(r,c):
+    return r % SIZE, c % SIZE
 
-def eliminar_grupo(tablero, grupo):
-    for f, c in grupo:
-        tablero[f][c] = 0
+# =====================================
+# MOVIMIENTOS
+# =====================================
 
-def colapsar_tablero(tablero):
-    for c in range(COLUMNAS):
-        columna = [tablero[f][c] for f in range(FILAS) if tablero[f][c] != 0]
-        while len(columna) < FILAS:
-            columna.insert(0, 0)
-        for f in range(FILAS):
-            tablero[f][c] = columna[f]
+def dfs_movimientos(tab, start, steps, rival):
+    stack = [(start[0], start[1], steps, {start})]
+    res = set()
+    while stack:
+        r,c,s,vis = stack.pop()
+        if s == 0:
+            if (r,c)!=start and (r,c)!=rival:
+                res.add((r,c))
+            continue
+        for dr,dc in DIRS:
+            nr,nc = wrap(r+dr,c+dc)
+            if (nr,nc) in vis: continue
+            if tab[nr][nc] == COLLAPSED: continue
+            stack.append((nr,nc,s-1, vis | {(nr,nc)}))
+    return res
 
-def obtener_movimientos(tablero):
-    movimientos = []
-    visitados = set()
 
-    for f in range(FILAS):
-        for c in range(COLUMNAS):
-            if tablero[f][c] != 0 and (f, c) not in visitados:
-                grupo = buscar_grupo(tablero, f, c, tablero[f][c], set())
-                for pos in grupo:
-                    visitados.add(pos)
-                if len(grupo) > 1:
-                    movimientos.append(grupo)
-    return movimientos
+def pasos_casilla(tab,pos,primer_turno):
+    if primer_turno: return 1
+    v = tab[pos[0]][pos[1]]
+    if isinstance(v,int): return v
+    return 1
 
-def hay_movimientos(tablero):
-    return len(obtener_movimientos(tablero)) > 0
 
-# ==============================
-# HEURÍSTICAS
-# ==============================
+def movimientos_validos(tab,pos,rival,primer_turno=False):
+    steps = pasos_casilla(tab,pos,primer_turno)
+    return dfs_movimientos(tab,pos,steps,rival)
 
-def heuristica1(tablero):
-    return sum(len(g) for g in obtener_movimientos(tablero))
+# =====================================
+# COLAPSO
+# =====================================
 
-def heuristica2(tablero):
-    return len(obtener_movimientos(tablero))
+def colapsar(tab,pos):
+    tab[pos[0]][pos[1]] = COLLAPSED
 
-def heuristica3(tablero):
-    vacios = sum(fila.count(0) for fila in tablero)
-    return -vacios
+# =====================================
+# HEURISTICAS
+# =====================================
 
-def heuristica4(tablero):
-    movimientos = obtener_movimientos(tablero)
-    return max((len(g) for g in movimientos), default=0)
+def contar_mov(tab,pos,rival):
+    return len(movimientos_validos(tab,pos,rival,False))
 
-def heuristica5(tablero):
-    colores = {v for fila in tablero for v in fila if v != 0}
-    return -len(colores)
 
-TODAS_HEURISTICAS = [
-    heuristica1,
-    heuristica2,
-    heuristica3,
-    heuristica4,
-    heuristica5
-]
+def celdas_restantes(tab):
+    return sum(1 for r in tab for v in r if v!=COLLAPSED)
 
-def evaluar(tablero, pesos, num_heur):
-    valores = [h(tablero) for h in TODAS_HEURISTICAS[:num_heur]]
-    pesos = pesos[:num_heur]
-    return sum(p*h for p, h in zip(pesos, valores))
 
-# ==============================
-# IA MINIMAX + ALPHA-BETA + IDS
-# ==============================
+def dist_toroidal(a,b):
+    dr = min(abs(a[0]-b[0]), SIZE-abs(a[0]-b[0]))
+    dc = min(abs(a[1]-b[1]), SIZE-abs(a[1]-b[1]))
+    return dr+dc
 
-class IA:
-    def __init__(self, tiempo_max=3, pesos=None, num_heur=5):
-        self.tiempo_max = tiempo_max
-        self.pesos = pesos or [1,1,1,1,1]
-        self.num_heur = num_heur
-        self.reset_metricas()
 
-    def reset_metricas(self):
+def heuristicas(tab,yo,rival):
+    mov_yo = contar_mov(tab,yo,rival)
+    mov_rival = contar_mov(tab,rival,yo)
+    h1 = mov_yo / MAX_MOV
+    h2 = mov_rival / MAX_MOV
+    h3 = (mov_yo - mov_rival) / MAX_MOV
+    h4 = celdas_restantes(tab) / MAX_CELDAS
+    h5 = 1 - (dist_toroidal(yo,rival) / MAX_DIST)
+    return [h1, -h2, h3, h4, h5]
+
+
+def evaluar(tab,yo,rival,pesos,usar_n):
+    hs = heuristicas(tab,yo,rival)[:usar_n]
+    ws = pesos[:usar_n]
+    return sum(w*h for w,h in zip(ws,hs))
+
+# =====================================
+# MINIMAX + ALPHA BETA + IDS
+# =====================================
+
+class Stats:
+    def __init__(self):
         self.nodos = 0
-        self.profundidad_max = 0
+        self.profundidad = 0
         self.tiempo = 0
 
-    def minimax(self, tablero, profundidad, prof_actual, alpha, beta, maximizando, inicio):
 
-        if time.time() - inicio > self.tiempo_max:
-            return evaluar(tablero, self.pesos, self.num_heur), None
+def minimax(tab,yo,rival,prof,alpha,beta,maxim,stats,pesos,usar_n,fin_t):
+    if time.time()>=fin_t:
+        raise TimeoutError
 
-        self.nodos += 1
-        self.profundidad_max = max(self.profundidad_max, prof_actual)
+    stats.nodos += 1
+    stats.profundidad = max(stats.profundidad, prof)
 
-        movimientos = obtener_movimientos(tablero)
+    movs = movimientos_validos(tab,yo,rival)
 
-        if profundidad == 0 or not movimientos:
-            return evaluar(tablero, self.pesos, self.num_heur), None
+    if prof==0 or not movs:
+        if not movs: return -1
+        return evaluar(tab,yo,rival,pesos,usar_n)
 
-        mejor_mov = None
+    if maxim:
+        val=-math.inf
+        for m in movs:
+            ntab=[r[:] for r in tab]
+            colapsar(ntab,yo)
+            val=max(val,minimax(ntab,rival,m,prof-1,alpha,beta,False,stats,pesos,usar_n,fin_t))
+            alpha=max(alpha,val)
+            if beta<=alpha: break
+        return val
+    else:
+        val=math.inf
+        for m in movs:
+            ntab=[r[:] for r in tab]
+            colapsar(ntab,yo)
+            val=min(val,minimax(ntab,rival,m,prof-1,alpha,beta,True,stats,pesos,usar_n,fin_t))
+            beta=min(beta,val)
+            if beta<=alpha: break
+        return val
 
-        if maximizando:
-            max_eval = float('-inf')
-            for mov in movimientos:
-                nuevo = copy.deepcopy(tablero)
-                eliminar_grupo(nuevo, mov)
-                colapsar_tablero(nuevo)
 
-                val, _ = self.minimax(
-                    nuevo,
-                    profundidad-1,
-                    prof_actual+1,
-                    alpha,
-                    beta,
-                    False,
-                    inicio
-                )
+def mejor_movimiento_ids(tab,yo,rival,max_time,pesos,usar_n):
+    inicio=time.time()
+    fin=inicio+max_time
+    mejor=None
+    prof=1
+    stats=Stats()
 
-                if val > max_eval:
-                    max_eval = val
-                    mejor_mov = mov
+    while True:
+        try:
+            movs=movimientos_validos(tab,yo,rival)
+            best_val=-math.inf
+            best_move=None
+            for m in movs:
+                ntab=[r[:] for r in tab]
+                colapsar(ntab,yo)
+                val=minimax(ntab,rival,m,prof-1,-math.inf,math.inf,False,
+                            stats,pesos,usar_n,fin)
+                if val>best_val:
+                    best_val=val
+                    best_move=m
+            if time.time()<fin:
+                mejor=best_move
+                prof+=1
+            else:
+                break
+        except TimeoutError:
+            break
 
-                alpha = max(alpha, val)
-                if beta <= alpha:
-                    break
+    stats.tiempo=time.time()-inicio
+    return mejor,stats,prof-1
 
-            return max_eval, mejor_mov
-
-        else:
-            min_eval = float('inf')
-            for mov in movimientos:
-                nuevo = copy.deepcopy(tablero)
-                eliminar_grupo(nuevo, mov)
-                colapsar_tablero(nuevo)
-
-                val, _ = self.minimax(
-                    nuevo,
-                    profundidad-1,
-                    prof_actual+1,
-                    alpha,
-                    beta,
-                    True,
-                    inicio
-                )
-
-                if val < min_eval:
-                    min_eval = val
-                    mejor_mov = mov
-
-                beta = min(beta, val)
-                if beta <= alpha:
-                    break
-
-            return min_eval, mejor_mov
-
-    def mejor_movimiento(self, tablero):
-        self.reset_metricas()
-        inicio = time.time()
-        mejor = None
-        profundidad = 1
-
-        while time.time() - inicio < self.tiempo_max and profundidad <= MAX_DEPTH:
-            _, mov = self.minimax(
-                tablero,
-                profundidad,
-                0,
-                float('-inf'),
-                float('inf'),
-                True,
-                inicio
-            )
-            if mov:
-                mejor = mov
-            profundidad += 1
-
-        self.tiempo = time.time() - inicio
-        return mejor
-
-# ==============================
+# =====================================
 # JUGADORES
-# ==============================
+# =====================================
 
-def jugador_humano(tablero):
-    mostrar_tablero(tablero)
-    try:
-        f = int(input("Fila: "))
-        c = int(input("Columna: "))
-    except:
-        return None
-
-    if 0 <= f < FILAS and 0 <= c < COLUMNAS and tablero[f][c] != 0:
-        grupo = buscar_grupo(tablero, f, c, tablero[f][c], set())
-        if len(grupo) > 1:
-            return grupo
-    return None
-
-def jugador_random(tablero):
-    movs = obtener_movimientos(tablero)
+def jugador_random(tab,pos,rival):
+    movs=list(movimientos_validos(tab,pos,rival))
     return random.choice(movs) if movs else None
 
-def jugador_greedy(tablero):
-    movs = obtener_movimientos(tablero)
-    return max(movs, key=len) if movs else None
 
-def jugador_peor(tablero):
-    movs = obtener_movimientos(tablero)
-    return min(movs, key=len) if movs else None
+def jugador_greedy(tab,pos,rival,pesos,usar_n):
+    movs=movimientos_validos(tab,pos,rival)
+    best=None; bestv=-1e9
+    for m in movs:
+        ntab=[r[:] for r in tab]
+        colapsar(ntab,pos)
+        v=evaluar(ntab,m,rival,pesos,usar_n)
+        if v>bestv: bestv=v; best=m
+    return best
 
-# ==============================
-# PARTIDA
-# ==============================
 
-def jugar_partida_jugadores(jugadores: List[Callable]):
-    tablero = crear_tablero()
-    n = len(jugadores)
-    puntos = [0]*n
+def jugador_peor(tab,pos,rival,pesos,usar_n):
+    movs=movimientos_validos(tab,pos,rival)
+    worst=None; worstv=1e9
+    for m in movs:
+        ntab=[r[:] for r in tab]
+        colapsar(ntab,pos)
+        v=evaluar(ntab,m,rival,pesos,usar_n)
+        if v<worstv: worstv=v; worst=m
+    return worst
+
+# =====================================
+# PARTIDA ORIGINAL (2 JUGADORES)
+# =====================================
+
+def jugar_partida(tipoA,tipoB,max_time,pesos,usar_n,mostrar=True):
+
+    tab=crear_tablero(2)
+    p1,p2=encontrar_jokers(tab)
+
+    turnoA=True
+    primerA=True
+    primerB=True
+
+    statsA=Stats()
+    statsB=Stats()
+
+    while True:
+
+        if mostrar:
+            imprimir_tablero(tab,p1,p2)
+
+        if turnoA:
+
+            movs=movimientos_validos(tab,p1,p2,primerA)
+            if not movs:
+                return "B",statsA,statsB,celdas_restantes(tab)
+
+            if tipoA in ("humano","humano_experto"):
+                print("Movimientos:",movs)
+                m=eval(input("Movimiento: "))
+
+            elif tipoA=="random":
+                m=jugador_random(tab,p1,p2)
+
+            elif tipoA=="greedy":
+                m=jugador_greedy(tab,p1,p2,pesos,usar_n)
+
+            elif tipoA=="peor":
+                m=jugador_peor(tab,p1,p2,pesos,usar_n)
+
+            else:
+                m,s,_=mejor_movimiento_ids(tab,p1,p2,max_time,pesos,usar_n)
+                statsA.nodos+=s.nodos
+                statsA.profundidad=max(statsA.profundidad,s.profundidad)
+                statsA.tiempo+=s.tiempo
+
+            colapsar(tab,p1)
+            p1=m
+            primerA=False
+
+        else:
+
+            movs=movimientos_validos(tab,p2,p1,primerB)
+            if not movs:
+                return "A",statsA,statsB,celdas_restantes(tab)
+
+            if tipoB in ("humano","humano_experto"):
+                print("Movimientos:",movs)
+                m=eval(input("Movimiento: "))
+
+            elif tipoB=="random":
+                m=jugador_random(tab,p2,p1)
+
+            elif tipoB=="greedy":
+                m=jugador_greedy(tab,p2,p1,pesos,usar_n)
+
+            elif tipoB=="peor":
+                m=jugador_peor(tab,p2,p1,pesos,usar_n)
+
+            else:
+                m,s,_=mejor_movimiento_ids(tab,p2,p1,max_time,pesos,usar_n)
+                statsB.nodos+=s.nodos
+                statsB.profundidad=max(statsB.profundidad,s.profundidad)
+                statsB.tiempo+=s.tiempo
+
+            colapsar(tab,p2)
+            p2=m
+            primerB=False
+
+        turnoA=not turnoA
+
+# =====================================
+# PARTIDA MULTI-JUGADOR
+# =====================================
+
+def jugar_partida_multi(tipos, max_time, pesos, usar_n, mostrar=True):
+
+    n = len(tipos)
+
+    tab = crear_tablero(n)
+    posiciones = encontrar_jokers(tab)
+
+    primeros = [True]*n
+    stats = [Stats() for _ in range(n)]
+
     turno = 0
 
-    while hay_movimientos(tablero):
-        jugador = jugadores[turno % n]
-        mov = jugador(tablero)
+    while True:
 
-        if not mov:
-            turno += 1
-            continue
+        yo = turno
+        rival = (turno+1) % n
 
-        puntos[turno % n] += len(mov)**2
-        eliminar_grupo(tablero, mov)
-        colapsar_tablero(tablero)
-        turno += 1
+        if mostrar:
+            print("Turno jugador",yo)
 
-    max_p = max(puntos)
-    ganadores = [i for i,p in enumerate(puntos) if p == max_p]
-    return puntos, ganadores
+        pos_yo = posiciones[yo]
+        pos_rival = posiciones[rival]
 
-def jugar_varias_partidas(jugadores, cantidad):
-    resultados = []
-    for _ in range(cantidad):
-        puntos, ganadores = jugar_partida_jugadores(jugadores)
-        resultados.append((puntos, ganadores))
-    return resultados
+        movs = movimientos_validos(tab,pos_yo,pos_rival,primeros[yo])
 
-# ==============================
-# BARRA PROGRESO
-# ==============================
+        if not movs:
+            ganador = (yo-1) % n
+            return ganador,stats,celdas_restantes(tab)
 
-def barra_progreso(actual, total):
-    ancho = 30
-    llenos = int(ancho * actual / total)
-    barra = "█"*llenos + "-"*(ancho-llenos)
-    print(f"\rProgreso |{barra}| {actual}/{total}", end="")
+        tipo = tipos[yo]
 
-# ==============================
-# BENCHMARK AUTOMÁTICO + ANÁLISIS
-# ==============================
+        if tipo in ("humano","humano_experto"):
+            print("Movimientos:",movs)
+            m = eval(input("Movimiento: "))
 
-def ejecutar_benchmark():
+        elif tipo=="random":
+            m = jugador_random(tab,pos_yo,pos_rival)
 
-    incluir_humano = input("¿Incluir humano en benchmark? (s/n): ").lower() == "s"
+        elif tipo=="greedy":
+            m = jugador_greedy(tab,pos_yo,pos_rival,pesos,usar_n)
 
-    configuraciones_pesos = [
-        [1,1,1,1,1],
-        [2,1,1,2,1]
-    ]
+        elif tipo=="peor":
+            m = jugador_peor(tab,pos_yo,pos_rival,pesos,usar_n)
 
-    heuristicas = [1,2,3,4,5]
+        else:
+            if n==2:
+                m,s,_ = mejor_movimiento_ids(tab,pos_yo,pos_rival,max_time,pesos,usar_n)
+                stats[yo].nodos+=s.nodos
+                stats[yo].profundidad=max(stats[yo].profundidad,s.profundidad)
+                stats[yo].tiempo+=s.tiempo
+            else:
+                m = jugador_random(tab,pos_yo,pos_rival)
 
-    oponentes = {
-        "random": jugador_random,
-        "greedy": jugador_greedy,
-        "peor": jugador_peor,
-        "ia_igual": "ia_igual"
-    }
+        colapsar(tab,pos_yo)
+        posiciones[yo] = m
+        primeros[yo] = False
 
-    if incluir_humano:
-        oponentes["humano"] = jugador_humano
+        turno = (turno+1) % n
 
-    total_tests = (len(configuraciones_pesos) *
-                   len(heuristicas) *
-                   len(TIME_LIMITS) *
-                   len(oponentes) *
-                   NUM_MATCHES)
+# =====================================
+# BENCHMARK
+# =====================================
 
-    progreso = 0
-    resultados = []
+def benchmark():
 
-    print("\n===== INICIANDO BENCHMARK =====\n")
+    configs_pesos=[("pesos1",[0.4,0.3,0.5,0.2,0.2]),
+                   ("pesos2",[0.6,0.4,0.6,0.3,0.3])]
 
-    for pesos in configuraciones_pesos:
-        for h in heuristicas:
-            for t in TIME_LIMITS:
-                for nombre_op, op in oponentes.items():
-                    for _ in range(NUM_MATCHES):
+    tiempos=[1,3,10]
+    rivales=["random","greedy","peor","minimax"]
+    heuristicas_n=[1,2,3,4,5]
 
-                        ia = IA(tiempo_max=t, pesos=pesos, num_heur=h)
+    print("config heur tiempo rival ganador puntos nodos prof tiempo")
 
-                        def jia(tab):
-                            return ia.mejor_movimiento(tab)
+    for nombre,pesos in configs_pesos:
+        for n in heuristicas_n:
+            for t in tiempos:
+                for r in rivales:
+                    g,sA,sB,puntos=jugar_partida("minimax",r,t,pesos,n,False)
+                    print(nombre,n,t,r,g,puntos,
+                          sA.nodos,sA.profundidad,round(sA.tiempo,3))
 
-                        if nombre_op == "ia_igual":
-                            ia2 = IA(tiempo_max=t, pesos=pesos, num_heur=h)
-                            def jia2(tab):
-                                return ia2.mejor_movimiento(tab)
-                            puntos, ganadores = jugar_partida_jugadores([jia, jia2])
-                        else:
-                            puntos, ganadores = jugar_partida_jugadores([jia, op])
+# =====================================
+# MENU
+# =====================================
 
-                        resultados.append({
-                            "op": nombre_op,
-                            "pesos": tuple(pesos),
-                            "heur": h,
-                            "t": t,
-                            "p_ia": puntos[0],
-                            "gan_ia": 0 in ganadores,
-                            "tiempo": ia.tiempo,
-                            "nodos": ia.nodos,
-                            "prof": ia.profundidad_max
-                        })
+def menu():
 
-                        progreso += 1
-                        barra_progreso(progreso, total_tests)
+    while True:
 
-    print("\n\n===== FIN BENCHMARK =====")
-    print("Total partidas:", len(resultados))
+        print("\n1. Partida 2 jugadores (clasica)")
+        print("2. Partida con N jugadores")
+        print("3. Benchmark")
+        print("4. Salir")
 
-    # ==============================
-    # ANÁLISIS ESTRUCTURADO
-    # ==============================
+        op=input("> ")
 
-    print("\n\n===== RESUMEN ESTRUCTURADO =====\n")
+        if op=="1":
 
-    resumen = {}
+            jugar_partida(
+                "humano",
+                "minimax",
+                3,
+                [0.4,0.3,0.5,0.2,0.2],
+                5,
+                True
+            )
 
-    for r in resultados:
-        clave = (r["op"], r["pesos"], r["heur"], r["t"])
+        elif op=="2":
 
-        if clave not in resumen:
-            resumen[clave] = {
-                "wins": 0,
-                "points": 0,
-                "nodos": 0,
-                "prof": 0,
-                "tiempo": 0,
-                "partidas": 0
-            }
+            n=int(input("Cantidad de jugadores: "))
 
-        resumen[clave]["wins"] += 1 if r["gan_ia"] else 0
-        resumen[clave]["points"] += r["p_ia"]
-        resumen[clave]["nodos"] += r["nodos"]
-        resumen[clave]["prof"] += r["prof"]
-        resumen[clave]["tiempo"] += r["tiempo"]
-        resumen[clave]["partidas"] += 1
+            tipos=[]
+            for i in range(n):
+                print(f"Jugador {i} tipo (humano, humano_experto, minimax, random, greedy, peor):")
+                tipos.append(input("> "))
 
-    for clave, datos in sorted(resumen.items()):
-        op, pesos, heur, t = clave
-        partidas = datos["partidas"]
+            ganador,stats,puntos = jugar_partida_multi(
+                tipos,
+                3,
+                [0.4,0.3,0.5,0.2,0.2],
+                5,
+                True
+            )
 
-        print(f"Contra: {op}")
-        print(f"Pesos: {pesos} | Heurísticas: {heur} | Tiempo: {t}s")
-        print(f"Victorias IA: {datos['wins']} / {partidas}")
-        print(f"Promedio puntos: {datos['points']/partidas:.2f}")
-        print(f"Promedio nodos: {datos['nodos']/partidas:.2f}")
-        print(f"Profundidad promedio: {datos['prof']/partidas:.2f}")
-        print(f"Tiempo promedio: {datos['tiempo']/partidas:.4f}s")
-        print("-"*60)
+            print("Ganador:",ganador,"Puntos:",puntos)
 
-# ==============================
-# CONFIGURACIÓN JUGADORES
-# ==============================
+        elif op=="3":
+            benchmark()
 
-def seleccionar_jugador(idx):
+        else:
+            break
 
-    print(f"\nJugador {idx+1}:")
-    print("1. Humano")
-    print("2. IA")
-    print("3. Random")
-    print("4. Greedy")
-    print("5. Peor")
 
-    op = input("Opción: ")
-
-    if op == "1":
-        return jugador_humano
-
-    if op == "2":
-        t = int(input("Tiempo IA: "))
-        ia = IA(tiempo_max=t)
-        return lambda tab: ia.mejor_movimiento(tab)
-
-    if op == "3":
-        return jugador_random
-
-    if op == "4":
-        return jugador_greedy
-
-    if op == "5":
-        return jugador_peor
-
-    return jugador_random
-
-# ==============================
-# MAIN
-# ==============================
-
-def main():
-
-    print("1. Jugar partida")
-    print("2. Ejecutar benchmark automático")
-
-    modo = input("Modo: ")
-
-    if modo == "1":
-
-        n = int(input("Cantidad de jugadores: "))
-        partidas = int(input("Cantidad de partidas: "))
-
-        jugadores = []
-        for i in range(n):
-            jugadores.append(seleccionar_jugador(i))
-
-        resultados = jugar_varias_partidas(jugadores, partidas)
-
-        for i, (puntos, ganadores) in enumerate(resultados, 1):
-            print(f"\nPartida {i}")
-            print("Puntos:", puntos)
-            print("Ganadores:", ganadores)
-
-    elif modo == "2":
-        ejecutar_benchmark()
-
-if __name__ == "__main__":
-    main()
+if __name__=="__main__":
+    menu()
