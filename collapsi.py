@@ -13,10 +13,10 @@ JOKER = "J"
 COLLAPSED = "X"
 
 DIR_MAP = {
-    "U": (-1, 0),
-    "D": (1, 0),
-    "L": (0, -1),
-    "R": (0, 1),
+    "ARRIBA": (-1, 0),
+    "ABAJO": (1, 0),
+    "IZQUIERDA": (0, -1),
+    "DERECHA": (0, 1),
 }
 
 # Máximos teóricos (para normalización)
@@ -466,12 +466,14 @@ def elegir_movimiento_minimax(
 # POLÍTICAS DE JUGADOR
 # =========================
 def parse_human_move_input(s: str) -> List[str]:
+    """
+    Permite ingresar direcciones en español separadas por espacios.
+    Ejemplo:
+    ARRIBA DERECHA ABAJO
+    """
     s = s.strip().upper().replace(",", " ")
     parts = [p for p in s.split() if p]
-    if len(parts) == 1 and all(ch in DIR_MAP for ch in parts[0]) and len(parts[0]) > 1:
-        return list(parts[0])
     return parts
-
 
 def pedir_movimiento_humano(state: GameState) -> Move:
     p = state.to_move
@@ -503,13 +505,13 @@ def pedir_movimiento_humano(state: GameState) -> Move:
         else:
             k_in = ks[0]
 
-        s = input("Camino (ej: U R D) o (ej: URD): ").strip()
+        s = input("Camino (ej: ARRIBA DERECHA ABAJO): ").strip()
         dirs = parse_human_move_input(s)
         if len(dirs) != k_in:
             print(f"Debes ingresar exactamente {k_in} direcciones.")
             continue
         if any(d not in DIR_MAP for d in dirs):
-            print("Usa solo U,D,L,R.")
+            print("Usa solo: ARRIBA, ABAJO, IZQUIERDA, DERECHA.")
             continue
 
         start = state.pos[p]
